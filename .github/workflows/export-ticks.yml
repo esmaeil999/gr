@@ -355,20 +355,22 @@ jobs:
 
             RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-            # ---- Caption ----
-            CAPTION=$(printf \
-              '<b>%s Tick Data - %s</b>\n----------------\nRange: %s -> %s\nSize: %s MB' \
-              "$INSTRUMENT_UPPER" "$YEAR" "$FROM_DATE" "$TO_DATE" "$FILE_SIZE_MB")
+                        # ---- Caption (matches Telegram format: title / date range / size) ----
+            FROM_DAY=$(date -u -d "$FROM_DATE" +%Y-%m-%d)
+            TO_DAY=$(date -u -d "$TO_DATE" +%Y-%m-%d)
 
-            # ---- Inline keyboard ----
+            CAPTION=$(printf \
+              '<b>%s Tick Data</b>\n📅 %s → %s\n💾 Size: %s MB' \
+              "$INSTRUMENT_UPPER" "$FROM_DAY" "$TO_DAY" "$FILE_SIZE_MB")
+
+            # ---- Inline keyboard: single DOWNLOAD button ----
             KEYBOARD=$(python3 -c '
           import json, sys
           data = {"inline_keyboard": [
-              [{"text": sys.argv[1], "url": sys.argv[2]}],
-              [{"text": "GitHub Release", "url": sys.argv[3]}]
+              [{"text": "⬇️ DOWNLOAD", "url": sys.argv[1]}]
           ]}
           print(json.dumps(data, ensure_ascii=False))
-          ' "$DOWNLOAD_TEXT" "$ASSET_URL" "$RELEASE_URL")
+          ' "$ASSET_URL")
 
             echo "Sending $YEAR to Telegram..."
 
