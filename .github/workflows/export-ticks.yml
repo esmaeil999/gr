@@ -33,16 +33,31 @@ jobs:
     steps:
       - name: Build list of years
         id: years
+        shell: bash
         run: |
-          set -e
-          START=${{ inputs.start_year }}
-          END=${{ inputs.end_year }}
-          if [ "$START" -gt "$END" ]; then
-            echo "start_year must be <= end_year"; exit 1
+          set -euo pipefail
+          START="$(echo '${{ inputs.start_year }}' | tr -dc '0-9')"
+          END="$(echo '${{ inputs.end_year }}' | tr -dc '0-9')"
+
+          if [ -z "$START" ] || [ -z "$END" ]; then
+            echo "::error::start_year / end_year must be numeric years, e.g. 2015 and 2026"; exit 1
           fi
-          YEARS=$(seq "$START" "$END" | jq -R -s -c 'split("\n") | map(select(length > 0) | tonumber)')
-          echo "years=$YEARS" >> $GITHUB_OUTPUT
+          if [ "$START" -gt "$END" ]; then
+            echo "::error::start_year ($START) must be <= end_year ($END)"; exit 1
+          fi
+
+          LIST=""
+          for y in $(seq "$START" "$END"); do
+            LIST="${LIST:+$LIST,}$y"
+          done
+          YEARS="[$LIST]"
+
+          if [ "$YEARS" = "[]" ]; then
+            echo "::error::No years generated"; exit 1
+          fi
+
           echo "Years to export: $YEARS"
+          echo "years=$YEARS" >> "$GITHUB_OUTPUT"
 
   export:
     needs: plan
