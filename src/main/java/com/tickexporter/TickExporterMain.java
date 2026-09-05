@@ -162,7 +162,7 @@ public class TickExporterMain {
         boolean completed = finished.await(5, TimeUnit.HOURS) || finished.await(30, TimeUnit.MINUTES);
         if (!completed) {
             log.error("Timed out waiting for export to finish");
-            try { client.stopStrategy(processId, null); } catch (Exception ignored) {}
+            try { client.stopStrategy(processId); } catch (Exception ignored) {}
             System.exit(1);
         }
 
