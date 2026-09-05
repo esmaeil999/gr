@@ -158,27 +158,38 @@ public class TickExporterMain {
         // small wait so subscription is ready
         Thread.sleep(3000);
 
-        long processId = client.startStrategy(new TickExportStrategy(instrument, from, to, csvFile, success));
+                long processId = client.startStrategy(new TickExportStrategy(instrument, from, to, csvFile, success));
 
-        // Wait for strategy to finish (max ~5.5 hours to leave margin for Actions)
-        boolean completed = finished.await(5, TimeUnit.HOURS) || finished.await(30, TimeUnit.MINUTES);
+        // Wait for strategy to finish
+        boolean completed = finished.await(5, TimeUnit.HOURS);
         if (!completed) {
             log.error("Timed out waiting for export to finish");
             try { client.stopStrategy(processId); } catch (Exception ignored) {}
             System.exit(1);
         }
 
-        try {
-            client.disconnect();
-        } catch (Exception ignored) {}
-
         if (!success.get() || !csvFile.exists() || csvFile.length() == 0) {
             log.error("Export failed or produced empty file");
+            try { client.disconnect(); } catch (Exception ignored) {}
             System.exit(1);
         }
 
         log.info("CSV ready: {} ({} bytes)", csvFile.getAbsolutePath(), csvFile.length());
         System.out.println("OUTPUT_CSV=" + csvFile.getAbsolutePath());
+
+        // disconnect را غیرمسدودکننده انجام بده
+        Thread disconnectThread = new Thread(() -> {
+            try {
+                client.disconnect();
+            } catch (Exception ignored) {}
+        });
+        disconnectThread.setDaemon(true);
+        disconnectThread.start();
+        try {
+            disconnectThread.join(5000);
+        } catch (InterruptedException ignored) {}
+
+        System.exit(0);
     }
 
     // ==================== Strategy ====================
