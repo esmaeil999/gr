@@ -8,16 +8,18 @@ on:
         required: true
         default: "EURUSD"
         type: string
-      start_year:
-        description: "Start year (e.g. 2015)"
+      start:
+        description: "Start date/time UTC (YYYY-MM-DD HH:mm)"
         required: true
+        default: "2015-01-01 00:00"
         type: string
-      end_year:
-        description: "End year inclusive (e.g. 2026)"
+      end:
+        description: "End date/time UTC, exclusive (YYYY-MM-DD HH:mm)"
         required: true
+        default: "2026-01-01 00:00"
         type: string
       create_release:
-        description: "Create GitHub Release per year?"
+        description: "Create a GitHub Release per year?"
         required: false
         default: true
         type: boolean
@@ -26,52 +28,66 @@ permissions:
   contents: write
 
 jobs:
-  plan:
+  # ==========================================================
+  # Prepare: validate dates and build list of years
+  # ==========================================================
+  prepare:
     runs-on: ubuntu-latest
     outputs:
-      years: ${{ steps.years.outputs.years }}
+      from_date: ${{ steps.plan.outputs.from_date }}
+      to_date: ${{ steps.plan.outputs.to_date }}
+      years: ${{ steps.plan.outputs.years }}
     steps:
-      - name: Build list of years
-        id: years
+      - name: Build year list
+        id: plan
         shell: bash
+        env:
+          OVERALL_FROM: ${{ inputs.start }}
+          OVERALL_TO: ${{ inputs.end }}
         run: |
           set -euo pipefail
-          START="$(echo '${{ inputs.start_year }}' | tr -dc '0-9')"
-          END="$(echo '${{ inputs.end_year }}' | tr -dc '0-9')"
 
-          if [ -z "$START" ] || [ -z "$END" ]; then
-            echo "::error::start_year / end_year must be numeric years, e.g. 2015 and 2026"; exit 1
+          FROM_TS=$(date -u -d "$OVERALL_FROM" +%s)
+          TO_TS=$(date -u -d "$OVERALL_TO" +%s)
+
+          if [ "$FROM_TS" -ge "$TO_TS" ]; then
+            echo "::error::start ($OVERALL_FROM) must be before end ($OVERALL_TO)"
+            exit 1
           fi
-          if [ "$START" -gt "$END" ]; then
-            echo "::error::start_year ($START) must be <= end_year ($END)"; exit 1
+
+          START_YEAR=$(date -u -d "$OVERALL_FROM" +%Y)
+          END_YEAR=$(date -u -d "$OVERALL_TO" +%Y)
+
+          # If end is exactly Jan 1st 00:00, that year has no data in an exclusive range
+          if [ "$(date -u -d "$OVERALL_TO" +%m-%d\ %H:%M)" = "01-01 00:00" ]; then
+            END_YEAR=$((END_YEAR - 1))
           fi
 
           LIST=""
-          for y in $(seq "$START" "$END"); do
+          for y in $(seq "$START_YEAR" "$END_YEAR"); do
             LIST="${LIST:+$LIST,}$y"
           done
           YEARS="[$LIST]"
 
-          if [ "$YEARS" = "[]" ]; then
-            echo "::error::No years generated"; exit 1
-          fi
-
+          echo "Overall range: $OVERALL_FROM -> $OVERALL_TO"
           echo "Years to export: $YEARS"
-          echo "years=$YEARS" >> "$GITHUB_OUTPUT"
 
+          echo "from_date=$OVERALL_FROM" >> "$GITHUB_OUTPUT"
+          echo "to_date=$OVERALL_TO"     >> "$GITHUB_OUTPUT"
+          echo "years=$YEARS"            >> "$GITHUB_OUTPUT"
+
+  # ==========================================================
+  # Export: one job per year, sequential in ascending order
+  # ==========================================================
   export:
-    needs: plan
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
-      # One year at a time, in ascending order (2015, 2016, ...)
       max-parallel: 1
       fail-fast: false
       matrix:
-        year: ${{ fromJson(needs.plan.outputs.years) }}
-
-    env:
-      YEAR: ${{ matrix.year }}
+        year: ${{ fromJson(needs.prepare.outputs.years) }}
 
     steps:
       - name: Checkout
@@ -87,24 +103,72 @@ jobs:
       - name: Build
         run: mvn -B -q clean package -DskipTests
 
-      - name: Compute date range
+      # ==========================================================
+      # Calculate year range (clamped to overall from/to)
+      # ==========================================================
+      - name: Calculate year range
         id: range
+        shell: bash
+        env:
+          OVERALL_FROM: ${{ needs.prepare.outputs.from_date }}
+          OVERALL_TO: ${{ needs.prepare.outputs.to_date }}
+          YEAR: ${{ matrix.year }}
+          INSTRUMENT: ${{ inputs.symbol }}
         run: |
-          NEXT=$((YEAR + 1))
-          echo "from=${YEAR}-01-01 00:00" >> $GITHUB_OUTPUT
-          echo "to=${NEXT}-01-01 00:00" >> $GITHUB_OUTPUT
-          echo "Range: ${YEAR}-01-01 00:00 -> ${NEXT}-01-01 00:00"
+          set -euo pipefail
 
+          YEAR_START="${YEAR}-01-01 00:00"
+          YEAR_END="$((YEAR + 1))-01-01 00:00"
+
+          # Start date: first year uses the real start, others use Jan 1st
+          if [ "$(date -u -d "$OVERALL_FROM" +%Y)" -eq "$YEAR" ]; then
+            FROM_DATE="$OVERALL_FROM"
+          else
+            FROM_DATE="$YEAR_START"
+          fi
+
+          # End date: last year uses the real end, others use next Jan 1st
+          if [ "$(date -u -d "$OVERALL_TO" +%Y)" -eq "$YEAR" ]; then
+            TO_DATE="$OVERALL_TO"
+          else
+            TO_DATE="$YEAR_END"
+          fi
+
+          # Safety check
+          if [ "$(date -u -d "$FROM_DATE" +%s)" -ge "$(date -u -d "$TO_DATE" +%s)" ]; then
+            echo "::error::Invalid range for $YEAR: $FROM_DATE -> $TO_DATE"
+            exit 1
+          fi
+
+          INSTRUMENT_UPPER=$(echo "$INSTRUMENT" | tr '[:lower:]' '[:upper:]')
+          SLUG="ticks-${INSTRUMENT_UPPER}-${YEAR}"
+
+          echo "================================"
+          echo "Year: $YEAR"
+          echo "From: $FROM_DATE"
+          echo "To:   $TO_DATE"
+          echo "Slug: $SLUG"
+          echo "================================"
+
+          echo "from_date=$FROM_DATE"                >> "$GITHUB_OUTPUT"
+          echo "to_date=$TO_DATE"                    >> "$GITHUB_OUTPUT"
+          echo "slug=$SLUG"                          >> "$GITHUB_OUTPUT"
+          echo "instrument_upper=$INSTRUMENT_UPPER"  >> "$GITHUB_OUTPUT"
+
+      # ==========================================================
+      # Download
+      # ==========================================================
       - name: Run Tick Exporter
         env:
           DUKASCOPY_USERNAME: ${{ secrets.DUKASCOPY_USERNAME }}
           DUKASCOPY_PASSWORD: ${{ secrets.DUKASCOPY_PASSWORD }}
-          INSTRUMENT: ${{ inputs.symbol }}
-          FROM: ${{ steps.range.outputs.from }}
-          TO: ${{ steps.range.outputs.to }}
+          INSTRUMENT: ${{ steps.range.outputs.instrument_upper }}
+          FROM: ${{ steps.range.outputs.from_date }}
+          TO: ${{ steps.range.outputs.to_date }}
           OUTPUT_DIR: ./output
         run: |
           set -e
+          echo "Downloading ${INSTRUMENT}: ${FROM} -> ${TO}"
           java -Xmx4g -jar target/jforex-tick-exporter-1.0.0.jar
           echo "=== Output files ==="
           ls -lh output/
@@ -114,30 +178,33 @@ jobs:
         run: |
           set -e
           CSV=$(ls output/*.csv | head -n1)
-          ZIP="ticks-${{ inputs.symbol }}-${YEAR}.zip"
+          ZIP="${{ steps.range.outputs.slug }}.zip"
           zip -j "$ZIP" "$CSV"
-          echo "zip_path=$ZIP" >> $GITHUB_OUTPUT
+          echo "zip_path=$ZIP" >> "$GITHUB_OUTPUT"
           ls -lh "$ZIP"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ticks-${{ inputs.symbol }}-${{ matrix.year }}
+          name: ${{ steps.range.outputs.slug }}
           path: ${{ steps.zip.outputs.zip_path }}
           retention-days: 14
 
+      # ==========================================================
+      # Release (one per year)
+      # ==========================================================
       - name: Create GitHub Release
         if: ${{ inputs.create_release }}
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ticks-${{ inputs.symbol }}-${{ matrix.year }}
-          name: Ticks ${{ inputs.symbol }} ${{ matrix.year }}
+          tag_name: ${{ steps.range.outputs.slug }}
+          name: Ticks ${{ steps.range.outputs.instrument_upper }} ${{ matrix.year }}
           body: |
             Tick data export from Dukascopy (JForex SDK)
 
-            - **Symbol**: `${{ inputs.symbol }}`
-            - **From (UTC)**: `${{ steps.range.outputs.from }}`
-            - **To (UTC, exclusive)**: `${{ steps.range.outputs.to }}`
+            - **Symbol**: `${{ steps.range.outputs.instrument_upper }}`
+            - **From (UTC)**: `${{ steps.range.outputs.from_date }}`
+            - **To (UTC, exclusive)**: `${{ steps.range.outputs.to_date }}`
             - **Generated by**: GitHub Actions run ${{ github.run_id }}
           files: ${{ steps.zip.outputs.zip_path }}
           draft: false
