@@ -7,6 +7,7 @@ import com.dukascopy.api.system.ISystemListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.PrintWriter;
@@ -32,8 +33,9 @@ public class TickExporterMain {
     // DEMO JNLP (update only if Dukascopy changes the URL)
     private static final String JNLP_URL = "https://platform.dukascopy.com/demo_3/jforex_3.jnlp";
 
-    private static final long CHUNK_MS = 6L * 60 * 60 * 1000; // 6 hours
-    private static final long SLEEP_BETWEEN_CHUNKS_MS = 400;
+    // Optimized: larger chunks + less sleep
+    private static final long CHUNK_MS = 24L * 60 * 60 * 1000; // 24 hours
+    private static final long SLEEP_BETWEEN_CHUNKS_MS = 50;
 
     public static void main(String[] args) throws Exception {
         String instrumentStr = firstNonBlank(
@@ -209,12 +211,14 @@ public class TickExporterMain {
                 SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
                 fmt.setTimeZone(TimeZone.getTimeZone("GMT"));
 
-                out = new PrintWriter(new FileWriter(csvFile), true);
+                // Buffered writer for much faster I/O
+                out = new PrintWriter(new BufferedWriter(new FileWriter(csvFile), 1024 * 1024), false);
                 out.println("GmtTime,Bid,Ask,BidVolume,AskVolume");
 
                 long cursor = from;
                 long lastTickTime = -1;
                 long total = 0;
+                long startMs = System.currentTimeMillis();
 
                 while (cursor < to) {
                     long chunkEnd = Math.min(cursor + CHUNK_MS, to);
@@ -235,14 +239,19 @@ public class TickExporterMain {
                         total++;
                     }
 
-                    String msg = String.format("chunk %s | ticks=%d | total=%d",
-                            fmt.format(new Date(chunkEnd)), ticks.size(), total);
+                    long elapsedSec = (System.currentTimeMillis() - startMs) / 1000;
+                    String msg = String.format("chunk %s | ticks=%d | total=%d | elapsed=%ds",
+                            fmt.format(new Date(chunkEnd)), ticks.size(), total, elapsedSec);
                     console.getOut().println(msg);
                     log.info(msg);
 
                     cursor = chunkEnd;
-                    Thread.sleep(SLEEP_BETWEEN_CHUNKS_MS);
+                    if (SLEEP_BETWEEN_CHUNKS_MS > 0) {
+                        Thread.sleep(SLEEP_BETWEEN_CHUNKS_MS);
+                    }
                 }
+
+                out.flush();
 
                 console.getOut().println("FINISHED. total ticks = " + total);
                 log.info("FINISHED. total ticks = {}", total);
