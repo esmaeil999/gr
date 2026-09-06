@@ -6,17 +6,17 @@ on:
       symbol:
         description: "Symbol (e.g. EURUSD, XAUUSD)"
         required: true
-        default: "EURUSD"
+        default: "xauusd"
         type: string
       start:
         description: "Start date/time UTC (YYYY-MM-DD HH:mm)"
         required: true
-        default: "2015-01-01 00:00"
+        default: "2003-01-01 00:00"
         type: string
       end:
         description: "End date/time UTC, exclusive (YYYY-MM-DD HH:mm)"
         required: true
-        default: "2026-01-01 00:00"
+        default: "2026-09-01 00:00"
         type: string
       create_release:
         description: "Create a GitHub Release per year?"
@@ -92,14 +92,13 @@ jobs:
           echo "instrument_upper=$INSTRUMENT_UPPER"    >> "$GITHUB_OUTPUT"
 
   # ==========================================================
-  # Export: one job per year, sequential in ascending order
+  # Export: one job per year (can run in parallel)
   # ==========================================================
   export:
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
-      max-parallel: 1
       fail-fast: false
       matrix:
         year: ${{ fromJson(needs.prepare.outputs.years) }}
@@ -355,7 +354,7 @@ jobs:
 
             RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-                        # ---- Caption (matches Telegram format: title / date range / size) ----
+            # ---- Caption (matches Telegram format: title / date range / size) ----
             FROM_DAY=$(date -u -d "$FROM_DATE" +%Y-%m-%d)
             TO_DAY=$(date -u -d "$TO_DATE" +%Y-%m-%d)
 
